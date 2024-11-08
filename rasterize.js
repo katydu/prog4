@@ -1,7 +1,7 @@
 /* GLOBAL CONSTANTS AND VARIABLES */
 /* assignment specific globals */
 const INPUT_TRIANGLES_URL = "https://ncsucgclass.github.io/prog4/triangles.json"; // triangles file loc
-const INPUT_ELLIPSOIDS_URL = "https://ncsucgclass.github.io/prog4/ellipsoids.json"; // ellipsoids file loc
+//const INPUT_ELLIPSOIDS_URL = "https://ncsucgclass.github.io/prog4/ellipsoids.json"; // ellipsoids file loc
 var defaultEye = vec3.fromValues(0.5,0.5,-0.5); // default eye position in world space
 var defaultCenter = vec3.fromValues(0.5,0.5,0.5); // default view direction in world space
 var lookUp = vec3.fromValues(0,1,0); // default view up vector
@@ -33,7 +33,11 @@ var ambientULoc; // where to put ambient reflecivity for fragment shader
 var diffuseULoc; // where to put diffuse reflecivity for fragment shader
 var specularULoc; // where to put specular reflecivity for fragment shader
 var shininessULoc; // where to put specular exponent for fragment shader
-
+var blinnPhong = false;
+var vNormAttribLoc;
+var blinnPhongLoc;
+var textureCoordLoc;
+var uSamplerLoc;
 /* interaction variables */
 // clone()->return new Vec3(this.x, this.y, this.z);
 var Eye = vec3.clone(defaultEye); // eye position in world space
@@ -213,6 +217,12 @@ function handleKeyDown(event) {
             else
                 translateModel(vec3.scale(temp,Up,-viewDelta));
             break;
+        case "KeyB":
+            if (event.getModifierState("Shift"))
+                blinnPhong = !blinnPhong;
+            else
+                blinnPhong = !blinnPhong;
+        	break;
         case "Backspace": // reset model transforms to default
             for (var whichTriSet=0; whichTriSet<numTriangleSets; whichTriSet++) {
                 vec3.set(inputTriangles[whichTriSet].translation,0,0,0);
@@ -277,7 +287,7 @@ function loadModels() {
             var whichSetTri; // index of triangle in current triangle set
             var vtxToAdd; // vtx coords to add to the coord array
             var normToAdd; // vtx normal to add to the coord array
-            var uvToAdd;
+            var uvToAdd; // add u and v into coord array
             var triToAdd; // tri indices to add to the index array
             var maxCorner = vec3.fromValues(Number.MIN_VALUE,Number.MIN_VALUE,Number.MIN_VALUE); // bbox corner
             var minCorner = vec3.fromValues(Number.MAX_VALUE,Number.MAX_VALUE,Number.MAX_VALUE); // other corner
@@ -304,9 +314,12 @@ function loadModels() {
                     normToAdd = inputTriangles[whichSet].normals[whichSetVert]; // get normal to add
                     
                     uvToAdd = inputTriangles[whichSet].uvs[whichSetVert];
+
                     inputTriangles[whichSet].glVertices.push(vtxToAdd[0],vtxToAdd[1],vtxToAdd[2]); // put coords in set coord list
                     inputTriangles[whichSet].glNormals.push(normToAdd[0],normToAdd[1],normToAdd[2]); // put normal in set coord list
-                    inputTriangles[whichSet].glUVs.push(uvToAdd[0],uvToAdd[1]); // seperate u and v and push into 
+
+                    inputTriangles[whichSet].glUVs.push(uvToAdd[0],uvToAdd[1]); // seperate u and v
+
                     vec3.max(maxCorner,maxCorner,vtxToAdd); // update world bounding box corner maxima
                     vec3.min(minCorner,minCorner,vtxToAdd); // update world bounding box corner minima
                     vec3.add(inputTriangles[whichSet].center,inputTriangles[whichSet].center,vtxToAdd); // add to ctr sum
@@ -389,7 +402,6 @@ function setupShaders() {
         // texture
         varying vec2 vTextureCoord;
         uniform sampler2D uSampler;
-        //out vec4 fragcolor;
 
         // eye location
         uniform vec3 uEyePosition; // the eye's position in world
@@ -405,6 +417,8 @@ function setupShaders() {
         uniform vec3 uDiffuse; // the diffuse reflectivity
         uniform vec3 uSpecular; // the specular reflectivity
         uniform float uShininess; // the specular exponent
+        // blinnPhong lighting
+        uniform bool blinnPhong;
         
         // geometry properties
         varying vec3 vWorldPos; // world xyz of fragment
@@ -426,10 +440,21 @@ function setupShaders() {
             vec3 halfVec = normalize(light+eye);
             float highlight = pow(max(0.0,dot(normal,halfVec)),uShininess);
             vec3 specular = uSpecular*uLightSpecular*highlight; // specular term
+            vec3 reflectVec = normalize(normal - light);
             
             // combine to output color
             vec3 colorOut = ambient + diffuse + specular; // no specular yet
-            gl_FragColor = texture2D(uSampler,vTextureCoord); 
+            vec2 flippedTexCoord = vec2(1.0 - vTextureCoord.x, vTextureCoord.y); // flip the texture in y axis
+            vec4 textureColor = texture2D(uSampler,flippedTexCoord); 
+
+            gl_FragColor = textureColor;
+            
+            if(!blinnPhong){
+                highlight = pow(max(0.0,dot(normal,reflectVec)),uShininess);
+                gl_FragColor = vec4(textureColor.rgb * colorOut,textureColor.a);
+                // I can access individual color channels from textureColor
+                // ex: textureColor.a/textureColor.r/textureColor.g/textureColor.b/
+            }
         }
     `;
     
@@ -468,6 +493,8 @@ function setupShaders() {
                 // locate vertex uniforms
                 mMatrixULoc = gl.getUniformLocation(shaderProgram, "umMatrix"); // ptr to mmat
                 pvmMatrixULoc = gl.getUniformLocation(shaderProgram, "upvmMatrix"); // ptr to pvmmat
+  
+                // locate texture attrubute and uniforms
                 textureCoordLoc = gl.getAttribLocation(shaderProgram, "aTextureCoord");
                 gl.enableVertexAttribArray(textureCoordLoc);
                 uSamplerLoc = gl.getUniformLocation(shaderProgram, "uSampler");
@@ -481,6 +508,8 @@ function setupShaders() {
                 diffuseULoc = gl.getUniformLocation(shaderProgram, "uDiffuse"); // ptr to diffuse
                 specularULoc = gl.getUniformLocation(shaderProgram, "uSpecular"); // ptr to specular
                 shininessULoc = gl.getUniformLocation(shaderProgram, "uShininess"); // ptr to shininess
+
+                blinnPhongLoc = gl.getUniformLocation(shaderProgram, "blinnPhong");
                 
                 // pass global constants into fragment uniforms
                 gl.uniform3fv(eyePositionULoc,Eye); // pass in the eye's position
@@ -551,7 +580,7 @@ function loadTexture(url) {
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
       }
     };
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); // flip the texture upside down
     image.crossOrigin = "Anonymous";
     image.src = url;
   
@@ -625,13 +654,14 @@ function renderModels() {
         gl.uniform3fv(diffuseULoc,currSet.material.diffuse); // pass in the diffuse reflectivity
         gl.uniform3fv(specularULoc,currSet.material.specular); // pass in the specular reflectivity
         gl.uniform1f(shininessULoc,currSet.material.n); // pass in the specular exponent
-        
+        gl.uniform1i(blinnPhongLoc, blinnPhong);
         // vertex buffer: activate and feed into vertex shader
         gl.bindBuffer(gl.ARRAY_BUFFER,vertexBuffers[whichTriSet]); // activate
         gl.vertexAttribPointer(vPosAttribLoc,3,gl.FLOAT,false,0,0); // feed
         gl.bindBuffer(gl.ARRAY_BUFFER,normalBuffers[whichTriSet]); // activate
         gl.vertexAttribPointer(vNormAttribLoc,3,gl.FLOAT,false,0,0); // feed
         
+        // texture buffer
         gl.bindBuffer(gl.ARRAY_BUFFER, textureBuffers[whichTriSet]);
         gl.vertexAttribPointer(textureCoordLoc,2,gl.FLOAT,false,0,0);
         gl.activeTexture(gl.TEXTURE0);
@@ -645,8 +675,7 @@ function renderModels() {
     } // end for each triangle set
     
     
-} // end render model
-  
+} // end render model  
 
 /* MAIN -- HERE is where execution begins after window load */
 
