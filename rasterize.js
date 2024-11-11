@@ -1,6 +1,8 @@
 /* GLOBAL CONSTANTS AND VARIABLES */
 /* assignment specific globals */
 const INPUT_TRIANGLES_URL = "https://ncsucgclass.github.io/prog4/triangles.json"; // triangles file loc
+const makeYourOwn_URL = "./makeyourown.json";
+var makeYourOwn = false;
 //const INPUT_ELLIPSOIDS_URL = "https://ncsucgclass.github.io/prog4/ellipsoids.json"; // ellipsoids file loc
 var defaultEye = vec3.fromValues(0.5,0.5,-0.5); // default eye position in world space
 var defaultCenter = vec3.fromValues(0.5,0.5,0.5); // default view direction in world space
@@ -17,8 +19,6 @@ var inputTriangles = []; // the triangle data as loaded from input files
 var numTriangleSets = 0; // how many triangle sets in input scene
 var inputEllipsoids = []; // the ellipsoid data as loaded from input files
 var numEllipsoids = 0; // how many ellipsoids in the input scene
-var textureBuffers = [];
-var texture;
 var vertexBuffers = []; // this contains vertex coordinate lists by set, in triples
 var normalBuffers = []; // this contains normal component lists by set, in triples
 var triSetSizes = []; // this contains the size of each triangle set
@@ -33,7 +33,9 @@ var ambientULoc; // where to put ambient reflecivity for fragment shader
 var diffuseULoc; // where to put diffuse reflecivity for fragment shader
 var specularULoc; // where to put specular reflecivity for fragment shader
 var shininessULoc; // where to put specular exponent for fragment shader
+var textureBuffers = [];
 var blinnPhong = false;
+var transparency = true;
 var vNormAttribLoc;
 var blinnPhongLoc;
 var textureCoordLoc;
@@ -221,7 +223,13 @@ function handleKeyDown(event) {
             if (event.getModifierState("Shift"))
                 blinnPhong = !blinnPhong;
             else
-                blinnPhong = !blinnPhong;
+                transparency = !transparency;
+        	break;
+        case "Digit1":
+            if (event.getModifierState("Shift")){
+                makeYourOwn = !makeYourOwn;
+                main();
+            }
         	break;
         case "Backspace": // reset model transforms to default
             for (var whichTriSet=0; whichTriSet<numTriangleSets; whichTriSet++) {
@@ -229,7 +237,6 @@ function handleKeyDown(event) {
                 vec3.set(inputTriangles[whichTriSet].xAxis,1,0,0);
                 vec3.set(inputTriangles[whichTriSet].yAxis,0,1,0);
             } // end for all triangle sets
-            
             break;
     } // end switch
 } // end handleKeyDown
@@ -246,7 +253,12 @@ function setupWebGL() {
       imageContext = imageCanvas.getContext("2d"); 
       var bkgdImage = new Image(); 
       bkgdImage.crossOrigin = "Anonymous";
-      bkgdImage.src = "https://ncsucgclass.github.io/prog4/sky.jpg";
+      if(makeYourOwn){
+        bkgdImage.src = "https://ncsucgclass.github.io/prog4/stars.jpg";
+      }else{
+        bkgdImage.src = "https://ncsucgclass.github.io/prog4/sky.jpg";
+      }
+      
       bkgdImage.onload = function(){
           var iw = bkgdImage.width, ih = bkgdImage.height;
           imageContext.drawImage(bkgdImage,0,0,iw,ih,0,0,cw,ch);   
@@ -276,8 +288,11 @@ function setupWebGL() {
 // read models in, load them into webgl buffers
 function loadModels() {
  
-    
-    inputTriangles = getJSONFile(INPUT_TRIANGLES_URL,"triangles"); // read in the triangle data
+    if(makeYourOwn){
+        inputTriangles = getJSONFile(makeYourOwn_URL,"triangles");
+    }else{
+        inputTriangles = getJSONFile(INPUT_TRIANGLES_URL,"triangles"); // read in the triangle data
+    }
 
     try {
         if (inputTriangles == String.null)
@@ -325,7 +340,6 @@ function loadModels() {
                     vec3.add(inputTriangles[whichSet].center,inputTriangles[whichSet].center,vtxToAdd); // add to ctr sum
                 } // end for vertices in set
                 vec3.scale(inputTriangles[whichSet].center,inputTriangles[whichSet].center,1/numVerts); // avg ctr sum
-
                 // send the vertex coords and normals to webGL
                 vertexBuffers[whichSet] = gl.createBuffer(); // init empty webgl set vertex coord buffer
                 gl.bindBuffer(gl.ARRAY_BUFFER,vertexBuffers[whichSet]); // activate that buffer
@@ -363,6 +377,7 @@ function loadModels() {
         console.log(e);
     } // end catch
 } // end load models
+
 
 // setup the webGL shaders
 function setupShaders() {
@@ -419,6 +434,8 @@ function setupShaders() {
         uniform float uShininess; // the specular exponent
         // blinnPhong lighting
         uniform bool blinnPhong;
+        uniform float uAlpha;
+        uniform bool utransparency;
         
         // geometry properties
         varying vec3 vWorldPos; // world xyz of fragment
@@ -440,7 +457,7 @@ function setupShaders() {
             vec3 halfVec = normalize(light+eye);
             float highlight = pow(max(0.0,dot(normal,halfVec)),uShininess);
             vec3 specular = uSpecular*uLightSpecular*highlight; // specular term
-            vec3 reflectVec = normalize(normal - light);
+            //vec3 reflectVec = normalize(normal - light);
             
             // combine to output color
             vec3 colorOut = ambient + diffuse + specular; // no specular yet
@@ -448,10 +465,15 @@ function setupShaders() {
             vec4 textureColor = texture2D(uSampler,flippedTexCoord); 
 
             gl_FragColor = textureColor;
+
+            if(utransparency) {
+                gl_FragColor = vec4(textureColor.rgb * colorOut,textureColor.a * uAlpha);
+            }
             
             if(!blinnPhong){
-                highlight = pow(max(0.0,dot(normal,reflectVec)),uShininess);
-                gl_FragColor = vec4(textureColor.rgb * colorOut,textureColor.a);
+                gl_FragColor = textureColor;
+                // highlight = pow(max(0.0,dot(normal,reflectVec)),uShininess);
+                // gl_FragColor = vec4(textureColor.rgb * colorOut,textureColor.a);
                 // I can access individual color channels from textureColor
                 // ex: textureColor.a/textureColor.r/textureColor.g/textureColor.b/
             }
@@ -494,7 +516,7 @@ function setupShaders() {
                 mMatrixULoc = gl.getUniformLocation(shaderProgram, "umMatrix"); // ptr to mmat
                 pvmMatrixULoc = gl.getUniformLocation(shaderProgram, "upvmMatrix"); // ptr to pvmmat
   
-                // locate texture attrubute and uniforms
+                // locate texture attribute and uniforms
                 textureCoordLoc = gl.getAttribLocation(shaderProgram, "aTextureCoord");
                 gl.enableVertexAttribArray(textureCoordLoc);
                 uSamplerLoc = gl.getUniformLocation(shaderProgram, "uSampler");
@@ -510,6 +532,8 @@ function setupShaders() {
                 shininessULoc = gl.getUniformLocation(shaderProgram, "uShininess"); // ptr to shininess
 
                 blinnPhongLoc = gl.getUniformLocation(shaderProgram, "blinnPhong");
+                alphaLoc = gl.getUniformLocation(shaderProgram, "uAlpha");
+                transparencyLoc = gl.getUniformLocation(shaderProgram, "utransparency");
                 
                 // pass global constants into fragment uniforms
                 gl.uniform3fv(eyePositionULoc,Eye); // pass in the eye's position
@@ -581,6 +605,7 @@ function loadTexture(url) {
       }
     };
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true); // flip the texture upside down
+
     image.crossOrigin = "Anonymous";
     image.src = url;
   
@@ -667,6 +692,9 @@ function renderModels() {
         gl.activeTexture(gl.TEXTURE0);
         gl.bindTexture(gl.TEXTURE_2D, inputTriangles[whichTriSet].glImg);
         gl.uniform1i(uSamplerLoc, 0);
+        gl.uniform1i(transparencyLoc, transparency);
+        gl.uniform1f(alphaLoc, inputTriangles[whichTriSet].material.alpha);
+        addAlpha(inputTriangles[whichTriSet])
 
         // triangle buffer: activate and render
         gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,triangleBuffers[whichTriSet]); // activate
@@ -677,6 +705,15 @@ function renderModels() {
     
 } // end render model  
 
+function addAlpha(input) {
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.enable(gl.BLEND);
+    gl.depthMask(false);
+    if(input.material.alpha == 1) {
+        gl.depthMask(true);
+        gl.disable(gl.BLEND);
+    }
+}
 /* MAIN -- HERE is where execution begins after window load */
 
 function main() {
